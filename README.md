@@ -728,3 +728,245 @@ Worth running against targets with known structure to confirm behaviour:
 ## License
 
 MIT
+
+
+
+
+
+
+
+
+
+
+
+# isosolo — Run Sheet (Explorer cluster)
+
+Verified working run, 19 Oct 2026. Target: LRRTM4-206 (ENST00000456154).
+
+---
+
+## 0. Where things live
+
+| | Path |
+|---|---|
+| Package | `/scratch/chikatipalli.t/isosolo/isosolo` |
+| Output | `/scratch/chikatipalli.t/isosolo_out` |
+| Transcriptome | `/scratch/chikatipalli.t/refs/gencode.v50.transcripts.clean.fa` |
+| Genome | `/scratch/chikatipalli.t/refs/GRCh38.p14.genome.fa` |
+| Conda env | `isoprimer` |
+
+Note the nested path — the tarball extracts a folder inside the folder.
+
+---
+
+## 1. Install (once)
+
+```bash
+cd /scratch/chikatipalli.t
+unzip -o files.zip
+tar -xzf isosolo.tar.gz
+
+cd /scratch/chikatipalli.t/isosolo/isosolo    # <- nested
+conda activate isoprimer
+pip install -e .
+
+isosolo --version        # isosolo 0.1.0
+```
+
+The botocore dependency warning during install is unrelated and harmless.
+
+---
+
+## 2. Get a compute node
+
+**Do not run on the login node.** It gets killed, and `Ctrl-Z` there leaves stopped jobs behind.
+
+```bash
+srun --cpus-per-task=8 --mem=96G --time=4:00:00 --pty bash
+conda activate isoprimer                       # <- re-activate, srun drops to (base)
+cd /scratch/chikatipalli.t/isosolo/isosolo
+```
+
+Confirm the prompt changed from `explorer-01` to something like `c0615`.
+
+Two traps that cost time:
+- srun starts in `(base)`. Forgetting `conda activate` gives `command not found: primersearch`.
+- Pasting multi-line commands can mangle them. Paste one line at a time.
+
+---
+
+## 3. Check the gene
+
+```bash
+isosolo check --gene LRRTM4
+```
+
+```
+LRRTM4: 8 transcript(s)
+transcript            name                  length
+ENST00000409911       LRRTM4-205              3063
+ENST00000456154       LRRTM4-206               485
+...
+```
+
+Confirms Ensembl is reachable and gives you the transcript IDs.
+
+---
+
+## 4. Design
+
+**Always run with `--no-primersearch` first.**
+
+```bash
+isosolo design --gene LRRTM4 --transcript ENST00000456154 \
+  --outdir /scratch/chikatipalli.t/isosolo_out --no-primersearch -v
+```
+
+Runtime ~1 minute for a 485 nt transcript.
+
+```
+target LRRTM4-206 (ENST00000456154), 485 nt
+1 exon-exon junction(s)
+7 sibling isoform(s)
+uniqueness detection 0.3s
+3 region(s) -> 1 interval(s), 36 bp unique
+41356 thermodynamically valid candidate(s) in 52.3s
+10/10 reported candidates clean on every check
+```
+
+**Do not add `--transcriptome` to this step.** It makes the run take 30+ minutes (60 s × 30 pairs, sequential). Validate the chosen pair separately instead — Step 6.
+
+---
+
+## 5. Read the output
+
+```bash
+cd /scratch/chikatipalli.t/isosolo_out/LRRTM4-206
+
+awk -F, 'NR<=4 {print $5"\t"$6"\t"$9"\t"$12"\t"$13"\t"$16"\t"$17"\t"$18}' \
+    *_assay.csv | column -t
+```
+
+```
+Forward                Reverse                  bp  Anchor           Orient       Offtarget  3pMM  Junction
+GCTCACACTGAGAGCTGT     GCGTAATTAAATGGAAACCTGGG  84  chimeric_region  rev-anchored none       4     yes
+CTCACACTGAGAGCTGTAGA   GCGTAATTAAATGGAAACCTGGG  83  chimeric_region  rev-anchored none       3     yes
+```
+
+Take row 1.
+
+What to look for:
+
+| Column | Want |
+|---|---|
+| `Offtarget_Detail` | `none` |
+| `Anchor_Class` | `chimeric_region` |
+| `Min_3p_Mismatches` | high (max 5) |
+| `Spans_Exon_Junction` | `yes` |
+| `Amplicon_Size_bp` | 70–150 |
+
+Also open `LRRTM4-206_assay.html` in the OOD file browser to see the primer sitting on the unique region.
+
+---
+
+## 6. Validate the chosen pair
+
+### Transcriptome (~1 min)
+
+```bash
+cd /tmp
+printf "lrrtm4_206\tGCTCACACTGAGAGCTGT\tGCGTAATTAAATGGAAACCTGGG\n" > ps206_in.txt
+cat -A ps206_in.txt        # must show ^I tabs, not spaces
+
+time primersearch \
+  -seqall /scratch/chikatipalli.t/refs/gencode.v50.transcripts.clean.fa \
+  -infile ps206_in.txt -mismatchpercent 10 \
+  -outfile ps206_tx.txt -auto
+
+grep "Sequence:" ps206_tx.txt | sort -u
+```
+
+Result:
+```
+Primer name lrrtm4_206
+Amplimer 1
+    Sequence: ENST00000456154.1
+    GCTCACACTGAGAGCTGT hits forward strand at 317 with 0 mismatches
+    GCGTAATTAAATGGAAACCTGGG hits reverse strand at [86] with 0 mismatches
+    Amplimer length: 84 bp
+```
+
+One hit, the target, zero mismatches. Clean.
+
+Use `-mismatchpercent 10`, not the default 20 — at 20% a junk primer pair produced 309 KB of noise.
+
+### Genome (~3 min)
+
+```bash
+time primersearch \
+  -seqall /scratch/chikatipalli.t/refs/GRCh38.p14.genome.fa \
+  -infile ps206_in.txt -mismatchpercent 10 \
+  -outfile ps206_genome.txt -auto
+
+grep -c "Amplimer" ps206_genome.txt
+grep "Amplimer length" ps206_genome.txt | sort -n -k3 | head
+```
+
+**Important: a non-zero count is expected and usually fine.** PrimerSearch imposes no maximum product size, so it reports pairs of hits thousands of kb apart that PCR could never produce. Judge by the **lengths**, not the count. Anything above ~1,000 bp is not a real PCR product.
+
+For LRRTM4-206: 36 amplimers reported, all expected to be long — the primers sit 72 kb apart on genomic DNA.
+
+### NCBI Primer-BLAST
+
+Paste both sequences at [ncbi.nlm.nih.gov/tools/primer-blast](https://www.ncbi.nlm.nih.gov/tools/primer-blast/), organism *Homo sapiens*, database `refseq_rna`.
+
+Worth doing because it queries live NCBI rather than your v50 snapshot, and it weights 3′-end mismatches properly, which PrimerSearch doesn't.
+
+---
+
+## 7. Save everything
+
+```bash
+mkdir -p /scratch/chikatipalli.t/isosolo_out/LRRTM4-206/validation
+cp /tmp/ps206_*.txt /scratch/chikatipalli.t/isosolo_out/LRRTM4-206/validation/
+```
+
+---
+
+## Result for LRRTM4-206
+
+```
+Forward   GCTCACACTGAGAGCTGT          18 nt
+Reverse   GCGTAATTAAATGGAAACCTGGG     23 nt
+Amplicon  84 bp, spans the exon1/exon2 junction (72 kb intron)
+
+Specificity
+  0/7 sibling LRRTM4 isoforms amplify (3'-aware screen, margin 4/5)
+  1 hit across GENCODE v50 transcriptome: ENST00000456154.1, 0 mismatches
+  gDNA: primers 72 kb apart on chr2, no amplifiable product
+```
+
+**Why this works.** 206's exon 1 sits inside LRRTM4-207's longer first exon; its exon 2 sits inside the large exon shared by five others. Neither exon is unique. Only the *join* is. The reverse primer needs 4 bases of exon 1 followed immediately by 19 of exon 2 — an arrangement no other isoform has.
+
+**IsoPrimer cannot design for this target.** 206 is TSL 4 and IsoPrimer filters to TSL ≤ 3 before Primer3 runs.
+
+---
+
+## Pitfalls hit during this run
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `does not appear to be a Python project` | nested folder | `cd isosolo/isosolo` |
+| `primersearch: command not found` | srun drops to `(base)` | `conda activate isoprimer` |
+| `[200~srun: command not found` | bracketed-paste artefact | retype the line |
+| Run hangs ~45 min, 0-byte output | 30 pairs × 60 s PrimerSearch | use `--no-primersearch` |
+| `Stopped` jobs piling up | `Ctrl-Z` instead of `Ctrl-C` | `kill %1` |
+| Connection drops mid-run | login node + long job | use srun, or sbatch |
+
+---
+
+## Known inefficiencies
+
+- **41,356 candidates from a 36 bp interval**, 52 s. Most differ by one base. Needs deduplication by 3′ anchor position before the 166-gene panel is practical.
+- **PrimerSearch is not batched.** One sequential call for all pairs. IsoPrimer splits into 4 parallel batches; isosolo should too.
+- **The 1.4 GB transcriptome is the wrong input.** Pre-filtering to transcripts sharing k-mers with the target would cut 60 s to under 1 s.
