@@ -1,972 +1,379 @@
 # isosolo
 
 Design PCR primer pairs that amplify **one transcript isoform** and not its siblings.
+Most primer tools solve the opposite problem. Primer3 has no concept of isoforms.
+Primer-BLAST screens genome-wide but will happily return a pair hitting every
+transcript of your gene. 
+
+isosolo has an exclusion objective: amplify the target, exclude the siblings.
+
+Two scripts, no packaging:
+ 
+| File | What it does |
+|---|---|
+| `isosolo.py` | designs primer pairs |
+| `check_primers.py` | checks a pair you already have, by brute force |
 
 ---
-
-# Getting Started
-
-A complete guide for someone who has just downloaded this folder and never run it before.
-
-## Before you begin
-
-**What you need:**
-
-- A computer running macOS, Linux, or Windows with WSL
-- An internet connection (the tool fetches sequences from Ensembl)
-- About 15 minutes for first-time setup
-
-**What you don't need:**
-
-- Any prior Python knowledge
-- A high-performance cluster — a laptop is fine
-- Your own sequence files
-
-**What this tool does:** You give it a gene name and one transcript ID. It gives you a PCR primer pair that amplifies that transcript and not the other versions of the same gene.
-
-## Part 1 — Setup (once)
-
-### 1.1 Open a terminal
-
-- **macOS:** press `Cmd + Space`, type "Terminal", press Enter
-- **Linux:** `Ctrl + Alt + T`
-- **Windows:** open "Ubuntu" or "WSL" from the Start menu
-
-A window with a text prompt appears. Every command below is typed there, one line at a time, pressing Enter after each.
-
-### 1.2 Go to the downloaded folder
-
-If you downloaded a ZIP from GitHub, unzip it first by double-clicking. Then:
-
+ 
+## Install
+ 
 ```bash
-cd ~/Downloads/isosolo
+pip install primer3-py requests
 ```
+ 
+Sequences come from the Ensembl REST API, so nothing needs downloading. The first
+run of a gene needs internet; after that its sequences are cached in
+`~/.ensembl_cache` and reruns are instant.
 
-Adjust the path if you put it elsewhere. Check you're in the right place:
-
+### Optional, but recommended
+ 
+Without these two files the sibling screen still runs, but the **repeat filter** and
+the **off-gene check** do not. The repeat filter is what catches Alu elements —
+unique within a gene, present a million times genome-wide.
+ 
 ```bash
-ls
+mkdir -p ~/refs && cd ~/refs
+ 
+wget https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_50/gencode.v50.transcripts.fa.gz
+gunzip gencode.v50.transcripts.fa.gz
+ 
+# GENCODE headers are 74 characters; -parse_seqids caps IDs at 50.
+sed 's/^\(>[^|]*\).*/\1/' gencode.v50.transcripts.fa \
+    > gencode.v50.transcripts.clean.fa
+rm gencode.v50.transcripts.fa
+ 
+makeblastdb -in gencode.v50.transcripts.clean.fa \
+    -dbtype nucl -parse_seqids -out gencode_v50_tx
 ```
-
-You should see `pyproject.toml`, `README.md`, and a folder called `src`. If you see something else, you're in the wrong directory, or the real folder is nested one level deeper — try `cd isosolo` again.
-
-### 1.3 Check you have Python
-
-```bash
-python3 --version
+ 
+About 3 GB. Then set two paths near the top of `isosolo.py`:
+ 
+```python
+TRANSCRIPTOME_FASTA = "/path/to/refs/gencode.v50.transcripts.clean.fa"
+BLAST_DB            = "/path/to/refs/gencode_v50_tx"
 ```
-
-You need **3.9 or newer**. If you get "command not found," install Python from [python.org](https://www.python.org/downloads/) first.
-
-### 1.4 Install
-
-```bash
-pip install -e .
-```
-
-This reads `pyproject.toml` and pulls in the two things isosolo needs: `primer3-py` for melting-temperature calculations and `requests` for fetching sequences.
-
-Takes a minute or two. Lots of text scrolls past — normal.
-
-**If `pip` isn't found:** try `python3 -m pip install -e .`
-
-**If you get a permissions error:** use a virtual environment instead (recommended anyway):
-
-```bash
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -e .
-```
-
-With a venv you must run `source venv/bin/activate` each time you open a new terminal.
-
-### 1.5 Confirm it worked
-
-```bash
-isosolo --version
-```
-
-```
-isosolo 0.1.0
-```
-
-If you see that, you're ready.
-
-## Part 2 — Your first run
-
-### 2.1 Look at a gene
-
-Start here, always. It's fast and tells you whether everything is working.
-
-```bash
-isosolo check --gene LRRTM4
-```
-
-```
-LRRTM4: 8 transcript(s)
-transcript            name                  length
-ENST00000409911       LRRTM4-205              3063
-ENST00000409884       LRRTM4-204              3198
-ENST00000409093       LRRTM4-202              3120
-ENST00000409088       LRRTM4-201              3616
-ENST00000409282       LRRTM4-203              2633
-ENST00000456154       LRRTM4-206               485
-ENST00000491242       LRRTM4-207               596
-ENST00001115845       LRRTM4-208              3966
-```
-
-Every transcript (isoform) of the gene, with its ID, its name, and its length in bases.
-
-**Pick the one you want to target** and copy its transcript ID from the left column.
-
-*If this hangs or errors, you have no internet connection, or Ensembl is temporarily down.*
-
-### 2.2 Design primers
-
-```bash
-isosolo design \
-  --gene LRRTM4 \
-  --transcript ENST00000456154 \
-  --outdir ~/Desktop/my_primers \
-  --no-primersearch \
-  -v
-```
-
-> **Typing long commands:** the `\` at the end of a line means "continues on the next line." You can type it all on one line without the backslashes if you prefer.
-
-Breaking it down:
-
-| Part | Meaning |
-|---|---|
-| `design` | the thing you want to do |
-| `--gene LRRTM4` | which gene |
-| `--transcript ENST00000456154` | which isoform to target |
-| `--outdir ~/Desktop/my_primers` | where to put the results |
-| `--no-primersearch` | skip the slow optional checks for now |
-| `-v` | show detailed progress |
-
-Takes 1–3 minutes depending on transcript length.
-
-### 2.3 Read the output
-
-```
-======================================================================
-LRRTM4 | ENST00000456154
-target LRRTM4-206 (ENST00000456154), 485 nt
-1 exon-exon junction(s)
-7 sibling isoform(s)
-uniqueness detection 0.3s
-3 region(s) -> 1 interval(s), 36 bp unique
-41356 thermodynamically valid candidate(s) in 52.3s
-10/10 reported candidates clean on every check
-======================================================================
-batch complete: {'ok': 1}
-```
-
-Line by line:
-
-- **`485 nt`** — your target is 485 bases long
-- **`7 sibling isoform(s)`** — the 7 other versions of this gene it must avoid
-- **`36 bp unique`** — **the most important number.** This much of your target exists nowhere in the siblings. Zero would mean no assay is possible.
-- **`41356 candidates`** — possible primer pairs that passed the chemistry checks
-- **`10/10 clean`** — of the 10 reported, all amplify your target and none of the siblings
-
-## Part 3 — Getting your primers
-
-### 3.1 Find the results
-
-```bash
-cd ~/Desktop/my_primers/LRRTM4-206
-ls
-```
-
-```
-LRRTM4-206_assay.csv        ← your primers
-LRRTM4-206_assay.html       ← visual check
-LRRTM4-206_regions.html     ← what was unique
-LRRTM4-206_regions.tsv
-LRRTM4-206_regions.txt
-LRRTM4-206_positions.csv
-```
-
-### 3.2 Open the CSV
-
-Double-click `LRRTM4-206_assay.csv` to open it in Excel or Numbers. Each row is a primer pair, **best first**.
-
-Or from the terminal:
-
-```bash
-column -s, -t < LRRTM4-206_assay.csv | less -S
-```
-
-Press `q` to quit, arrow keys to scroll.
-
-### 3.3 The columns that matter
-
-Ignore most of them. These six decide whether a pair is good:
-
-| Column | What you want | Why |
-|---|---|---|
-| `Sibling_Amplicons` | **0** | how many other isoforms this pair would amplify |
-| `Anchor_Class` | `chimeric_region` | the strong kind of uniqueness; `base_difference` is weaker |
-| `Min_3p_Mismatches_vs_Any_Isoform` | high (max 5) | how different the discriminating end is from the siblings |
-| `Spans_Exon_Junction` | `yes` | means contaminating genomic DNA can't amplify |
-| `Amplicon_Size_bp` | 70–150 for ddPCR | product length |
-| `PS_Offgene_Amplicons` | **0** | other genes hit (blank if you used `--no-primersearch`) |
-
-Then take `Forward_Primer_Sequence_5to3` and `Reverse_Primer_Sequence_5to3` from the best row.
-
-### 3.4 Look at it
-
-Double-click `LRRTM4-206_assay.html`. It opens in your browser and shows, for each candidate, two aligned sequence tracks:
-
-- **top:** the full transcript with unique regions highlighted
-- **bottom:** where the primers sit
-
-Check that the anchored primer is sitting *on* a highlighted region, not next to it. This is the fastest sanity check and it takes five seconds.
-
-## Part 4 — What the four outcomes mean
-
-The run reports one of these:
-
-**`ok`** — primers found.
-
-**`no_unique_region`** — your target's sequence exists entirely inside another isoform. **No primer pair can tell them apart.** This isn't a bug or a failure of the tool; it's a fact about the biology. It happens when one isoform is just a shortened version of another. Pick a different target.
-
-**`no_candidates`** — unique sequence exists, but no primer pair met the temperature, GC, or size requirements. Try relaxing them:
-
-```bash
---min-amplicon 60 --max-amplicon 250 --tm-min 54 --tm-max 65
-```
-
-**`no_sequence`** — couldn't fetch from Ensembl. Check your gene name and transcript ID are correct and that you have internet.
-
-## Part 5 — The optional extra checks
-
-The run above only checked your target against **other isoforms of the same gene**. It did not check whether your primers hit some completely different gene.
-
-Two ways to cover that.
-
-### 5.1 NCBI Primer-BLAST (easiest, no setup)
-
-1. Go to [ncbi.nlm.nih.gov/tools/primer-blast](https://www.ncbi.nlm.nih.gov/tools/primer-blast/)
-2. Paste your forward sequence into "Forward primer"
-3. Paste your reverse sequence into "Reverse primer"
-4. Set Organism to *Homo sapiens*, Database to `refseq_rna`
-5. Click "Get Primers"
-
-You want it to report hits only on your target transcript.
-
-This is the most reliable check and needs nothing installed.
-
-### 5.2 Local PrimerSearch (optional, advanced)
-
-Requires EMBOSS and a transcriptome FASTA file:
-
-```bash
-conda install -c bioconda emboss
-```
-
-Then:
-
-```bash
-isosolo design --gene LRRTM4 --transcript ENST00000456154 \
-  --outdir ~/Desktop/my_primers \
-  --transcriptome /path/to/gencode.transcripts.fa \
-  --primersearch-mismatch 10 \
-  -v
-```
-
-**Be aware: this is slow** — roughly 60 seconds per primer pair against a full transcriptome, and it checks 30 pairs by default. Budget half an hour.
-
-To speed it up, reduce how many pairs get checked:
-
-```bash
-sed -i 's/^PRIMERSEARCH_SCREEN_TOP = 30/PRIMERSEARCH_SCREEN_TOP = 8/' src/isosolo/config.py
-```
-
-## Part 6 — Several targets at once
-
-Make a file called `targets.tsv`. Two columns, separated by a **tab**:
-
-```
-gene	transcript
-LRRTM4	ENST00000456154
-BIRC3	ENST00000532808
-GLUL	ENST00000331872
-```
-
-Then:
-
-```bash
-isosolo batch --targets targets.tsv --outdir ~/Desktop/batch_run -v
-```
-
-Each target gets its own folder, plus a `summary.csv` at the top level with one row per target. If one gene fails, the rest keep going.
-
-## Part 7 — How it actually works
-
-Optional reading, but it helps you judge the output.
-
-### The problem
-
-You want to amplify isoform 206 and nothing else. But isoforms share most of their sequence — they're different arrangements of the same exons. So the question is: **what part of 206 exists nowhere else?**
-
-### Step 1 — Find unique sequence
-
-Two detectors, because isoforms differ in two different ways.
-
-**Detector A — is this stretch new?**
-
-Slide a 41-base window along your target. At each position, search for that exact string in every sibling. If it's found nowhere, that position is unique.
-
-This catches **junctions**. Suppose your target splices exon 1 directly to exon 3. The siblings have exon 1 and they have exon 3, but with exon 2 wedged between. So a window straddling your junction is half one shared piece, half another shared piece — and that *combination* appears nowhere. The window is a chimera. Hence the label `chimeric_region`.
-
-**Detector B — is this one letter different?**
-
-For single-base differences, Detector A is too coarse. Detector B first finds where the equivalent region sits in each sibling (sliding a 15-base window, keeping matches ≥90% identical), then compares that single base.
-
-Catches splice sites shifted by a few bases, and short insertions or deletions.
-
-### Step 2 — Anchor the 3′ end
-
-A primer has two ends. The **3′ end** is where the enzyme starts copying.
-
-A primer that mismatches at its 5′ end still works. A primer that mismatches in its last 2–3 bases usually doesn't work at all.
-
-So the discriminating base must be the 3′ terminal base. Merely *overlapping* the unique region isn't enough — if the 3′ end sits in shared sequence, the primer works on every isoform.
-
-### Step 3 — Check it doesn't amplify anything else
-
-Simulates PCR against each sibling. A primer is assumed to work on a sibling only if its last 5 bases match perfectly and total mismatches stay low. If both primers would bind at a plausible distance, that's a predicted off-target and the pair is penalised.
-
-### Step 4 — Rank
-
-Specificity first, chemistry second. A thermodynamically perfect pair that hits another isoform loses to a merely decent pair that doesn't.
-
-## Part 8 — Worked example
-
-**LRRTM4-206** is 485 bases: exon 1 (382 bp) joined to exon 2 (103 bp). On the genome those exons sit 72,000 bases apart.
-
-Neither exon is unique:
-
-- exon 1 sits entirely inside LRRTM4-207's longer first exon
-- exon 2 sits entirely inside the large exon shared by five other isoforms
-
-A primer anywhere in exon 1 also hits 207. Anywhere in exon 2, it hits five others.
-
-**But the join is unique.** Only in 206 do those two particular pieces sit adjacent. Detector A found a 36 bp zone centred on the junction.
-
-The result:
-
-```
-Forward   GCTCACACTGAGAGCTGT          binds positions 317-334  (shared sequence)
-Reverse   GCGTAATTAAATGGAAACCTGGG     binds positions 378-400  (across the join)
-Amplicon  84 bp
-```
-
-The reverse primer needs 4 bases of exon 1 followed immediately by 19 bases of exon 2. In every other isoform, those 4 bases are followed by something completely different — so it can't bind.
-
-Two bonuses fall out of this:
-
-- **Genomic DNA can't amplify.** On the genome the primers sit 72,000 bases apart. PCR can't bridge that, so DNA contamination produces nothing.
-- **PrimerSearch against the full human transcriptome returned exactly one hit** — the target, zero mismatches, 84 bp.
-
-## Part 9 — Common problems
-
-**`command not found: isosolo`**
-The install didn't complete, or you're in a new terminal without the virtual environment active. Run `source venv/bin/activate`, or reinstall with `pip install -e .`
-
-**`gene XXXX not found`**
-Check the spelling. Use the official HGNC symbol (`LRRTM4`, not `lrrtm4` or an alias).
-
-**It hangs at "fetching"**
-No internet, or Ensembl is down. Wait and retry. Sequences are cached, so a retry skips what already downloaded.
-
-**`0 bp unique`**
-Your target is contained inside another isoform. No tool can design primers for it. Pick a different target.
-
-**`no_candidates` despite unique sequence found**
-The unique region is too small or awkwardly placed for the size and temperature constraints. Relax them with `--min-amplicon 60 --max-amplicon 250`.
-
-**It's very slow**
-Long transcripts with many siblings take longer. Skip `--transcriptome` and `--genome` for a first pass — they're the slow parts by far.
-
-## Part 10 — Before you order primers
-
-1. Open `*_assay.html` and confirm the anchored primer sits on a highlighted unique region.
-2. Check `Sibling_Amplicons` is **0** on your chosen row.
-3. Run NCBI Primer-BLAST on the pair (Part 5.1).
-4. Save the folder — `*_positions.csv` is your audit trail if anyone asks why a position was called unique.
-
-## What this tool cannot do
-
-- **It only knows annotated isoforms.** If a transcript isn't in Ensembl, isosolo can't avoid it.
-- **It's a prediction.** Primers must still be validated at the bench.
-- **A `base_difference` anchor is weak.** A single-base difference gives limited discrimination. Prefer `chimeric_region`.
-- **It won't design gene-level primers.** If you want to amplify *all* isoforms at once, that's the opposite problem and a different tool.
-
+ 
 ---
 
-# Operating Guide
-
-Reference documentation for routine use.
-
-## 1. What it does
-
-Designs PCR primer pairs that amplify **one transcript isoform** and not the other isoforms of the same gene.
-
-Most primer tools solve the opposite problem. Primer3 designs on a sequence you hand it and has no concept of isoforms. Primer-BLAST checks genome-wide specificity but happily returns a pair hitting every transcript of your gene. IsoPrimer deliberately maximises coverage across isoforms.
-
-isosolo has an **exclusion** objective: amplify the target, exclude the siblings.
-
-## 2. Installation
-
+## Run
+ 
+Edit one block:
+ 
+```python
+TARGET_JOBS = [
+    {"gene": "MET", "transcript": "ENST00000436117"},
+]
+ 
+OUTPUT_ROOT = "/path/to/isosolo_output"
+```
+ 
 ```bash
-cd /scratch/chikatipalli.t
-tar -xzf isosolo.tar.gz
-cd isosolo
-
-conda activate isoprimer       # already has primer3 and EMBOSS
-pip install -e .
-
-isosolo --version              # isosolo 0.1.0
+python isosolo.py
 ```
-
-EMBOSS is only needed for the optional transcriptome and genome checks. The core design runs without it.
-
-## 3. Inspect a gene first
-
+ 
+Or pass one target on the command line, which gives it its own output folder:
+ 
 ```bash
-isosolo check --gene LRRTM4
+python isosolo.py MET ENST00000436117
 ```
+ 
+Runtime is 1–3 minutes without the reference files, about 8 minutes with them. The
+repeat filter dominates — it streams the whole 1.5 GB transcriptome once per target.
+ 
+> **`OUTPUT_ROOT` is wiped at the start of every run.** Running targets one at a time
+> with the same path deletes the previous result. Use the command-line form, which
+> writes each target to its own folder.
+ 
+---
 
+## Reading the log
+ 
 ```
-LRRTM4: 8 transcript(s)
-transcript            name                  length
-ENST00000409911       LRRTM4-205              3063
-ENST00000456154       LRRTM4-206               485
-...
+MET | ENST00000436117
+target MET-204 (ENST00000436117), 6722 nt
+19 exon-exon junction(s)
+11 sibling isoform(s)
+3 region(s) -> 1 interval(s), 39 bp unique
+discriminating anchors: 19 of 39 interval positions have a 3' window
+                        that differs from every sibling
+12801 thermodynamically valid candidate(s) in 15.7s
+  repeat filter 248s; 0/40 primer pairs sit in a repeat
+  BLAST 5s; 0/40 hit another gene, 0/40 form a product with one primer alone
+10/10 reported pairs amplify nothing else
 ```
+ 
+Two lines matter:
+ 
+- **`N bp unique`** — zero means no assay is possible.
+- **`discriminating anchors: N of M`** — how many of those unique positions can
+  actually hold a primer's 3′ end. Usually far fewer than M. See below.
+---
 
-Confirms the gene resolves, lists every isoform with its cDNA length, and verifies Ensembl is reachable. Always run this before designing.
 
-## 4. Design
-
-```bash
-isosolo design \
-  --gene LRRTM4 \
-  --transcript ENST00000456154 \
-  --outdir /scratch/chikatipalli.t/isosolo_out \
-  --no-primersearch \
-  -v
-```
-
-| Flag | Meaning |
-|---|---|
-| `--gene` | gene symbol |
-| `--transcript` | Ensembl transcript ID, version optional |
-| `--outdir` | where results go |
-| `--no-primersearch` | skip the external checks for a fast first pass |
-| `-v` | verbose log |
-
-Runtime: roughly 1–2 minutes for a short transcript.
-
-## 5. What happens inside, step by step
-
-### Step 1 — Fetch sequences
-
-Pulls the target's cDNA plus every sibling isoform's cDNA from Ensembl REST. Cached under `~/.ensembl_cache`, so reruns are instant.
-
-`cdna` is the spliced mature transcript with UTRs — what your reverse transcriptase actually sees.
-
-### Step 2 — Find what's unique to the target
-
-Two independent detectors, because isoforms differ in two different ways.
-
-**Detector A — structural uniqueness (41 bp window)**
-
-At every position, take the 41-base window centred there and ask whether that exact string exists in any sibling. Not found anywhere → unique.
-
-This catches junctions. At a junction unique to your target, the window's left half exists in the siblings and its right half exists in the siblings, but never adjacent. The window is a *chimera* of two shared pieces, and the combination is new. Hence the class name `chimeric_region`.
-
-Also catches unique exons, alternative first exons, and alternative 3′ ends.
-
-**Detector B — base-level uniqueness (15 bp window, 90% identity)**
-
-For single-base differences, Detector A is too coarse. B first *locates* the equivalent region in each sibling by sliding a 15 bp window and keeping the best alignment ≥90% identical, then compares that one base.
-
-The 90% floor matters: without it, a random 15-mer elsewhere in a 4 kb sibling could carry the right base by chance and falsely clear your position.
-
-Catches splice acceptors shifted a few bases, short indels.
-
-**Output:** contiguous intervals, each labelled `chimeric_region` or `base_difference`. Chimeric is the stronger anchor.
-
-### Step 3 — Anchor a primer's 3′ end inside a unique interval
-
-PCR specificity is concentrated at the 3′ terminus, where polymerase begins extending. A primer mismatched at its 5′ end works fine; one mismatched in its last 2–3 bases usually won't extend at all.
-
-So "overlaps the unique region" is not enough — the **terminal base** has to be in it.
-
-Both orientations are tried:
-
-- `fwd-anchored` — forward primer's 3′ end in the interval, reverse downstream
-- `rev-anchored` — reverse primer's 3′ end in the interval, forward upstream
-
-Note: a reverse primer binds the sense strand backwards, so its 3′-terminal base corresponds to the **leftmost** base of its footprint on the cDNA.
-
-Each candidate is then filtered on GC 35–65%, Tm 56–63 °C, Tm balance ≤5 °C, amplicon 70–150 bp, and hairpin/dimer ΔG.
-
-### Step 4 — Screen off-targets
-
-**Sibling isoforms (always runs).** Simulates PCR against every other transcript of the gene. A primer is assumed to extend on a sibling only if its 3′-terminal 5 bases match perfectly *and* total mismatches are ≤3. If both primers would bind, in the right orientation, at a plausible distance, that's a predicted off-target product.
-
-**Transcriptome (optional, `--transcriptome`).** EMBOSS PrimerSearch against all human transcripts. Catches paralogs and pseudogenes — things the sibling check is completely blind to.
-
-**Genome (optional, `--genome`).** PrimerSearch against GRCh38. Catches amplification from genomic DNA contamination.
-
-The two kinds of check do different jobs:
-
-| | Python screen | PrimerSearch |
-|---|---|---|
-| Scope | sibling isoforms | whole transcriptome + genome |
-| 3′-end aware | **yes** | no — flat mismatch % |
-| Catches paralogs | no | **yes** |
-| Catches gDNA products | no | **yes** |
-
-### Step 5 — Rank
-
-Specificity dominates chemistry. A thermodynamically perfect pair that hits a paralog loses to a merely acceptable pair that doesn't.
-
-```
-off-gene amplicons      (PrimerSearch, transcriptome-wide)
-sibling amplicons       (Python screen)
-3′ mismatch margin      (larger is better)
-anchor class            (chimeric_region over base_difference)
-junction-spanning       (avoids gDNA amplification)
-genomic amplicons       (PrimerSearch, genome-wide)
-thermodynamics          (dimers, hairpins, size, Tm balance)
-```
-
-## 6. Reading the log
-
-```
-LRRTM4 | ENST00000456154
-target LRRTM4-206 (ENST00000456154), 485 nt
-1 exon-exon junction(s)
-7 sibling isoform(s)
-uniqueness detection 0.3s
-3 region(s) -> 1 interval(s), 36 bp unique          ← the key line
-41356 thermodynamically valid candidate(s) in 52.3s
-10/10 reported candidates clean on every check
-```
-
-**`N bp unique`** is the number that matters. Zero means no assay is possible. A few dozen means one anchor point. Hundreds means plenty of options.
-
-## 7. Output files
-
+## Output
+ 
+One folder per target, named after the isoform.
+ 
 | File | Contents |
 |---|---|
 | `*_assay.csv` | ranked primer pairs, ready to order |
-| `*_assay.html` | dual sequence tracks — unique regions above, primer placement below |
+| `*_assay.html` | two sequence tracks — unique regions above, primers below |
 | `*_regions.html` | full cDNA with unique regions colour-coded |
-| `*_regions.tsv` | each region with 50 bp of flanking context |
+| `*_regions.tsv` / `.txt` | each region with 50 bp of flanking context |
 | `*_positions.csv` | per-base audit: every position against every sibling |
-| `summary.csv` | one row per target (batch mode) |
+| `summary.csv` | one row per target, when more than one ran |
+ 
+A run that fails at the uniqueness stage writes **nothing** — the folder is created
+but stays empty. The reason is in the log.
+ 
+---
 
-**Key CSV columns:**
-
+## Choosing a pair
+ 
+Take rank 1. Four columns decide it:
+ 
 | Column | Want |
 |---|---|
-| `Anchor_Class` | `chimeric_region` |
-| `Anchor_Orientation` | either |
-| `Sibling_Amplicons` | **0** |
-| `Min_3p_Mismatches_vs_Any_Isoform` | high (max = TERM_WINDOW, default 5) |
-| `Spans_Exon_Junction` | `yes` (blocks gDNA) |
-| `Amplicon_Size_bp` | 70–150 for ddPCR |
-| `PS_Offgene_Amplicons` | **0** |
-
-The `*_positions.csv` audit trail is worth knowing about. If you ask "why was position 1,847 called unique," it tells you: sibling 201 aligned at 93% with a C, sibling 202 at 96% with a G, sibling 203 had no equivalent region. Every call is traceable.
-
-## 8. Four outcomes
-
-`status` in `summary.csv`:
-
-- **`ok`** — candidates found
-- **`no_unique_region`** — the target's sequence is contained within a sibling. **No primer pair can distinguish them.** This is the alternative-TSS / alternative-polyA case and it's a biological verdict, not a failure.
-- **`no_candidates`** — unique sequence exists but nothing met the Tm/GC/amplicon constraints. Widen them.
-- **`no_sequence`** — fetch failed.
-
-## 9. Adding the external checks
-
-PrimerSearch takes about **60 seconds per primer pair** against the full transcriptome, and it processes pairs sequentially. Screening 30 pairs = 30 minutes. Reduce first:
-
-```bash
-sed -i 's/^PRIMERSEARCH_SCREEN_TOP = 30/PRIMERSEARCH_SCREEN_TOP = 8/' src/isosolo/config.py
-```
-
-Then:
-
-```bash
-isosolo design --gene LRRTM4 --transcript ENST00000456154 \
-  --outdir /scratch/chikatipalli.t/isosolo_out \
-  --transcriptome /scratch/chikatipalli.t/refs/gencode.v50.transcripts.clean.fa \
-  --primersearch-mismatch 10 \
-  -v
-```
-
-Use 10% rather than the default 20% — at 20%, a 20 nt primer tolerates 4 mismatches anywhere, producing large amounts of meaningless output.
-
-**Faster alternative:** run the design with `--no-primersearch`, then check only your chosen pair manually:
-
-```bash
-printf "mypair\tFORWARD_SEQ\tREVERSE_SEQ\n" > ps_in.txt
-
-primersearch -seqall /path/transcriptome.fa -infile ps_in.txt \
-  -mismatchpercent 10 -outfile ps_tx.txt -auto
-
-grep "Sequence:" ps_tx.txt | sort -u
-```
-
-One hit, your target → clean.
-
-The genome pass is much slower (GRCh38 is ~20× the transcriptome). Run it on a compute node.
-
-## 10. Batch mode
-
-`targets.tsv`:
-
-```
-gene	transcript
-LRRTM4	ENST00000456154
-BIRC3	ENST00000532808
-GLUL	ENST00000331872
-```
-
-```bash
-isosolo batch --targets targets.tsv \
-  --outdir /scratch/chikatipalli.t/isosolo_batch -v
-```
-
-Writes `summary.csv` with one row per target. Exceptions in one gene don't kill the batch.
-
-## 11. Configuration
-
-Three levels, increasing precedence: `src/isosolo/config.py` → `--config file.yaml` → CLI flag.
-
-```bash
---min-amplicon 70 --max-amplicon 150     # ddPCR sizing
---tm-min 56 --tm-max 63 --tm-balance 5
---chimeric-window 41                      # structural detection
---align-window 15 --align-identity 0.90   # base-level detection
---term-window 5 --max-mismatches 3        # specificity model
---top-n 10
-```
-
-`isosolo design --help` lists everything.
-
-## 12. Worked example — LRRTM4-206
-
-**The problem.** 206 is two exons, 382 bp + 103 bp. Neither exon belongs to it alone:
-
-- exon 1 sits entirely inside LRRTM4-207's longer first exon
-- exon 2 sits entirely inside the large exon shared by 201, 202, 204, 205, 208
-
-A primer anywhere in exon 1 also hits 207. Anywhere in exon 2, it hits five others.
-
-**What's unique.** The join. Only in 206 do those two specific pieces sit adjacent. Detector A found a 36 bp zone centred on the junction at cDNA position 382.
-
-**The design.**
-
-```
-Forward   GCTCACACTGAGAGCTGT          binds 317-334   (exon 1, shared)
-Reverse   GCGTAATTAAATGGAAACCTGGG     binds 378-400   (across the join)
-Amplicon  84 bp
-```
-
-The reverse primer needs 4 bases of exon 1 followed immediately by 19 bases of exon 2. In every other isoform those 4 bases are followed by something different, so it can't bind.
-
-**Validation.**
-
-- 7/7 sibling isoforms excluded, 3′ mismatch margin 4/5
-- PrimerSearch, full GENCODE v50 transcriptome, 10% mismatch: one hit, `ENST00000456154.1`, 0 mismatches, 84 bp
-- Junction spans a 72 kb intron → genomic DNA can't amplify
-
-**Note:** IsoPrimer cannot design for this target. 206 is TSL 4 and IsoPrimer filters to TSL ≤ 3 before Primer3 runs.
-
-## 13. Known limitations
-
-- **Annotation-bound.** An isoform absent from Ensembl is invisible.
-- **PrimerSearch is not 3′-aware.** It applies one mismatch percentage across the whole primer, so it over-calls off-targets that wouldn't extend. Check *where* reported mismatches fall.
-- **Single-base anchors are weak.** A `base_difference` anchor gives roughly allele-specific-PCR discrimination, perhaps 1–2 logs. Prefer `chimeric_region`.
-- **Candidate generation is inefficient.** A 36 bp interval produced 41,356 candidates in 52 s, most differing by one base. Needs deduplication by 3′ anchor position before the 166-gene panel is practical.
-- **PrimerSearch is not batched or parallelised.** One sequential call. IsoPrimer splits into 4 parallel batches; isosolo should too.
-- **Wet-lab validation still required.** This is in-silico prediction.
-
-## 14. Before ordering
-
-1. Open `*_assay.html` and confirm the anchored primer sits on the unique region, not drifting into shared sequence.
-2. Run PrimerSearch against the transcriptome on your chosen pair.
-3. Run NCBI Primer-BLAST against *Homo sapiens* refseq_rna — it queries live NCBI rather than your local snapshot, and it is 3′-end aware.
-4. Save the validation output alongside the design.
-
-## 15. Testing checklist
-
-Worth running against targets with known structure to confirm behaviour:
-
-| Case | Expected |
-|---|---|
-| Target with a unique junction | `chimeric_region` anchor, `spans_junction=yes` |
-| Target with a unique exon | `chimeric_region`, possibly `spans_junction=no` |
-| Target that is a strict truncation of a sibling | `no_unique_region` |
-| Single-isoform gene | large unique region, many candidates |
-| Target with only a few bases different | `base_difference` anchor, low mismatch margin |
-| Same gene run twice | identical output (cache makes the second instant) |
-
+| `Offtarget_Isoforms_Amplified` | 0 |
+| `Repeat_Derived` | no |
+| `BLAST_Offgene_Amplicons` | 0 |
+| `BLAST_Self_Amplicons` | 0 |
+ 
+Then three that shape how you run it:
+ 
+- **`Anchor_Class`** — prefer `chimeric_region`. A `base_difference` anchor
+  discriminates on one base, which is allele-specific-PCR territory.
+- **`Spans_Exon_Junction`** — `yes` means genomic DNA can't amplify. If `no`, use
+  DNase and a no-RT control.
+- **`Min_3p_Mismatches_vs_Any_Isoform`** — higher is safer, max 5. **Treat a 0 with
+  suspicion rather than as a verdict**: the seeded search sometimes reports a phantom
+  site where brute force finds no binding position at all. Run `check_primers.py`
+  before dismissing a pair that otherwise looks good.
+`Self_3p_Compl_F` / `_R` are Primer3's `SELF_END`, the same number Primer-BLAST
+reports as "Self 3′ complementarity". Reported, not filtered. A 6 means the primer's
+3′ end can prime off itself — worth a no-template control.
+ 
 ---
 
-## License
-
-MIT
-
-
-
-
-
-
-
-
-
-
-
-# isosolo — Run Sheet (Explorer cluster)
-
-Verified working run, 19 Oct 2026. Target: LRRTM4-206 (ENST00000456154).
-
----
-
-## 0. Where things live
-
-| | Path |
-|---|---|
-| Package | `/scratch/chikatipalli.t/isosolo/isosolo` |
-| Output | `/scratch/chikatipalli.t/isosolo_out` |
-| Transcriptome | `/scratch/chikatipalli.t/refs/gencode.v50.transcripts.clean.fa` |
-| Genome | `/scratch/chikatipalli.t/refs/GRCh38.p14.genome.fa` |
-| Conda env | `isoprimer` |
-
-Note the nested path — the tarball extracts a folder inside the folder.
-
----
-
-## 1. Install (once)
-
-```bash
-cd /scratch/chikatipalli.t
-unzip -o files.zip
-tar -xzf isosolo.tar.gz
-
-cd /scratch/chikatipalli.t/isosolo/isosolo    # <- nested
-conda activate isoprimer
-pip install -e .
-
-isosolo --version        # isosolo 0.1.0
-```
-
-The botocore dependency warning during install is unrelated and harmless.
-
----
-
-## 2. Get a compute node
-
-**Do not run on the login node.** It gets killed, and `Ctrl-Z` there leaves stopped jobs behind.
-
-```bash
-srun --cpus-per-task=8 --mem=96G --time=4:00:00 --pty bash
-conda activate isoprimer                       # <- re-activate, srun drops to (base)
-cd /scratch/chikatipalli.t/isosolo/isosolo
-```
-
-Confirm the prompt changed from `explorer-01` to something like `c0615`.
-
-Two traps that cost time:
-- srun starts in `(base)`. Forgetting `conda activate` gives `command not found: primersearch`.
-- Pasting multi-line commands can mangle them. Paste one line at a time.
-
----
-
-## 3. Check the gene
-
-```bash
-isosolo check --gene LRRTM4
-```
-
-```
-LRRTM4: 8 transcript(s)
-transcript            name                  length
-ENST00000409911       LRRTM4-205              3063
-ENST00000456154       LRRTM4-206               485
-...
-```
-
-Confirms Ensembl is reachable and gives you the transcript IDs.
-
----
-
-## 4. Design
-
-**Always run with `--no-primersearch` first.**
-
-```bash
-isosolo design --gene LRRTM4 --transcript ENST00000456154 \
-  --outdir /scratch/chikatipalli.t/isosolo_out --no-primersearch -v
-```
-
-Runtime ~1 minute for a 485 nt transcript.
-
-```
-target LRRTM4-206 (ENST00000456154), 485 nt
-1 exon-exon junction(s)
-7 sibling isoform(s)
-uniqueness detection 0.3s
-3 region(s) -> 1 interval(s), 36 bp unique
-41356 thermodynamically valid candidate(s) in 52.3s
-10/10 reported candidates clean on every check
-```
-
-**Do not add `--transcriptome` to this step.** It makes the run take 30+ minutes (60 s × 30 pairs, sequential). Validate the chosen pair separately instead — Step 6.
-
----
-
-## 5. Read the output
-
-```bash
-cd /scratch/chikatipalli.t/isosolo_out/LRRTM4-206
-
-awk -F, 'NR<=4 {print $5"\t"$6"\t"$9"\t"$12"\t"$13"\t"$16"\t"$17"\t"$18}' \
-    *_assay.csv | column -t
-```
-
-```
-Forward                Reverse                  bp  Anchor           Orient       Offtarget  3pMM  Junction
-GCTCACACTGAGAGCTGT     GCGTAATTAAATGGAAACCTGGG  84  chimeric_region  rev-anchored none       4     yes
-CTCACACTGAGAGCTGTAGA   GCGTAATTAAATGGAAACCTGGG  83  chimeric_region  rev-anchored none       3     yes
-```
-
-Take row 1.
-
-What to look for:
-
-| Column | Want |
-|---|---|
-| `Offtarget_Detail` | `none` |
-| `Anchor_Class` | `chimeric_region` |
-| `Min_3p_Mismatches` | high (max 5) |
-| `Spans_Exon_Junction` | `yes` |
-| `Amplicon_Size_bp` | 70–150 |
-
-Also open `LRRTM4-206_assay.html` in the OOD file browser to see the primer sitting on the unique region.
-
----
-
-## 6. Validate the chosen pair
-
-### Transcriptome (~1 min)
-
-```bash
-cd /tmp
-printf "lrrtm4_206\tGCTCACACTGAGAGCTGT\tGCGTAATTAAATGGAAACCTGGG\n" > ps206_in.txt
-cat -A ps206_in.txt        # must show ^I tabs, not spaces
-
-time primersearch \
-  -seqall /scratch/chikatipalli.t/refs/gencode.v50.transcripts.clean.fa \
-  -infile ps206_in.txt -mismatchpercent 10 \
-  -outfile ps206_tx.txt -auto
-
-grep "Sequence:" ps206_tx.txt | sort -u
-```
-
-Result:
-```
-Primer name lrrtm4_206
-Amplimer 1
-    Sequence: ENST00000456154.1
-    GCTCACACTGAGAGCTGT hits forward strand at 317 with 0 mismatches
-    GCGTAATTAAATGGAAACCTGGG hits reverse strand at [86] with 0 mismatches
-    Amplimer length: 84 bp
-```
-
-One hit, the target, zero mismatches. Clean.
-
-Use `-mismatchpercent 10`, not the default 20 — at 20% a junk primer pair produced 309 KB of noise.
-
-### Genome (~3 min)
-
-```bash
-time primersearch \
-  -seqall /scratch/chikatipalli.t/refs/GRCh38.p14.genome.fa \
-  -infile ps206_in.txt -mismatchpercent 10 \
-  -outfile ps206_genome.txt -auto
-
-grep -c "Amplimer" ps206_genome.txt
-grep "Amplimer length" ps206_genome.txt | sort -n -k3 | head
-```
-
-**Important: a non-zero count is expected and usually fine.** PrimerSearch imposes no maximum product size, so it reports pairs of hits thousands of kb apart that PCR could never produce. Judge by the **lengths**, not the count. Anything above ~1,000 bp is not a real PCR product.
-
-For LRRTM4-206: 36 amplimers reported, all expected to be long — the primers sit 72 kb apart on genomic DNA.
-
-### NCBI Primer-BLAST
-
-Paste both sequences at [ncbi.nlm.nih.gov/tools/primer-blast](https://www.ncbi.nlm.nih.gov/tools/primer-blast/), organism *Homo sapiens*, database `refseq_rna`.
-
-Worth doing because it queries live NCBI rather than your v50 snapshot, and it weights 3′-end mismatches properly, which PrimerSearch doesn't.
-
----
-
-## 7. Save everything
-
-```bash
-mkdir -p /scratch/chikatipalli.t/isosolo_out/LRRTM4-206/validation
-cp /tmp/ps206_*.txt /scratch/chikatipalli.t/isosolo_out/LRRTM4-206/validation/
-```
-
----
-
-## Result for LRRTM4-206
-
-```
-Forward   GCTCACACTGAGAGCTGT          18 nt
-Reverse   GCGTAATTAAATGGAAACCTGGG     23 nt
-Amplicon  84 bp, spans the exon1/exon2 junction (72 kb intron)
-
-Specificity
-  0/7 sibling LRRTM4 isoforms amplify (3'-aware screen, margin 4/5)
-  1 hit across GENCODE v50 transcriptome: ENST00000456154.1, 0 mismatches
-  gDNA: primers 72 kb apart on chr2, no amplifiable product
-```
-
-**Why this works.** 206's exon 1 sits inside LRRTM4-207's longer first exon; its exon 2 sits inside the large exon shared by five others. Neither exon is unique. Only the *join* is. The reverse primer needs 4 bases of exon 1 followed immediately by 19 of exon 2 — an arrangement no other isoform has.
-
-**IsoPrimer cannot design for this target.** 206 is TSL 4 and IsoPrimer filters to TSL ≤ 3 before Primer3 runs.
-
----
-
-## Pitfalls hit during this run
-
-| Symptom | Cause | Fix |
+## When no pair exists
+ 
+Most targets in a dense annotation have none, and the reason decides whether anything
+can be done.
+ 
+| Status | Meaning | Fixable? |
 |---|---|---|
-| `does not appear to be a Python project` | nested folder | `cd isosolo/isosolo` |
-| `primersearch: command not found` | srun drops to `(base)` | `conda activate isoprimer` |
-| `[200~srun: command not found` | bracketed-paste artefact | retype the line |
-| Run hangs ~45 min, 0-byte output | 30 pairs × 60 s PrimerSearch | use `--no-primersearch` |
-| `Stopped` jobs piling up | `Ctrl-Z` instead of `Ctrl-C` | `kill %1` |
-| Connection drops mid-run | login node + long job | use srun, or sbatch |
-
+| `strict subset` | the whole transcript sits inside one named sibling | **No** — not by any method |
+| `piecewise cover` | every stretch is in *some* sibling, none in all of them | Maybe, with a combination assay |
+| `no_candidates` | unique sequence exists but no position can anchor a 3′ end, or nothing met the Tm/GC/amplicon limits | Sometimes — widen the constraints |
+| `no_sequence` | Ensembl returned 500s or timed out | Yes — rerun |
+ 
+The sibling named in a `strict subset` message is often **not** one you were
+interested in. On ARPC5L the blocker was ARPC5L-207, a model that may not be
+expressed in the tissue at all. That is the cost of designing against the full
+annotation.
+ 
+**A pattern worth knowing:** in every two-isoform pair tested so far, the short or
+non-canonical isoform works and the long canonical one fails — TFRC-214 over
+TFRC-201, MET-204 over MET-202, LRRTM4-206 over LRRTM4-201. A canonical transcript
+contains all the exons and all the standard junctions, so the short variants are
+built from pieces of it, but it has nothing they lack.
+ 
 ---
 
-## Known inefficiencies
+## Checking a pair
+ 
+`check_primers.py` is a second, independent implementation. Where isosolo uses
+k-mer seeding for speed, this checks **every position by brute force** — when the
+two disagree, this one is right.
+ 
+```python
+GENE    = "MET"
+FORWARD = "TTCAGTTACCGTGAAGATCCC"
+REVERSE = "GCGATGTTGACATGCCTAATAA"
+```
+ 
+```bash
+python check_primers.py
+```
+ 
+```
+isoform   length   result               forward primer            reverse primer
+MET-204     6722   AMPLIFIES  74 bp     pos 2601, 0 mm (0 at 3')  pos 2653, 0 mm (0 at 3')
+MET-203     3389   no                   pos 2746, 0 mm (0 at 3')  pos 822, 8 mm (1 at 3')
+...
+SPECIFIC: only MET-204 amplifies (74 bp).
+```
+ 
+`no site` is the strongest possible result — no plausible binding position at all.
+ 
+`No transcript amplifies` usually means a primer was typed on the wrong strand. Both
+go in 5′→3′ exactly as ordered; the reverse is complemented by the script.
+ 
+One gene only. Genes with many isoforms are slow — TFRC has 61 and takes a few
+minutes. On a cluster, run it on a compute node.
+ 
+---
 
-- **41,356 candidates from a 36 bp interval**, 52 s. Most differ by one base. Needs deduplication by 3′ anchor position before the 166-gene panel is practical.
-- **PrimerSearch is not batched.** One sequential call for all pairs. IsoPrimer splits into 4 parallel batches; isosolo should too.
-- **The 1.4 GB transcriptome is the wrong input.** Pre-filtering to transcripts sharing k-mers with the target would cut 60 s to under 1 s.
+## How it works
+ 
+### 1. Fetch
+ 
+The target plus every sibling isoform, from Ensembl REST.
+ 
+### 2. Find unique sequence
+ 
+Two detectors, because isoforms differ in two ways.
+ 
+**`chimeric_region`** — slide a 41 bp window; if that exact string appears in no
+sibling, the position is unique. This catches junctions: at a junction unique to your
+target, the window's left half exists in the siblings and its right half exists in the
+siblings, but never adjacent. The window is a chimera of two shared pieces.
+ 
+**`base_difference`** — for single-base differences, 41 bp is too coarse. This locates
+the equivalent region in each sibling with a 15 bp window at ≥90% identity, then
+compares that one base. Catches shifted splice sites and short indels.
+ 
+### 3. Decide where a primer may END
+ 
+**This is the step that distinguishes isosolo from a generic designer.**
+ 
+A primer's 3′ end is the only part that discriminates — the polymerase grabs that end
+and builds outward, so a mismatch there stops extension while a mismatch near the 5′
+end is almost free. (This is why 5′ tails and adapters amplify normally.)
+ 
+Sitting inside a unique region is not enough. A base is flagged `chimeric_region` when
+the 41 bp window **around** it is absent from the siblings, which is true for positions
+up to 20 nt from the actual difference. A primer ending there carries the
+discriminating base mid-primer, where the polymerase ignores it.
+ 
+So a position may be a 3′ anchor only if, for every sibling, at least one of the
+primer's last 5 bases differs from what that sibling carries there
+(`REQUIRE_DISCRIMINATING_ANCHOR`).
+ 
+On MET-204 this cut 39 "unique" positions to 19, and turned a pair that amplified 8 of
+11 isoforms into one that amplified none.
+ 
+### 4. Build pairs
+ 
+Every length 18–24 nt at every allowed anchor, with every partner giving a 70–150 bp
+product. Filtered on Tm 56–63 °C, GC 35–65%, Tm difference ≤5 °C, and hairpin/dimer
+ΔG above −5 kcal/mol.
+ 
+Both orientations are tried. Note that a reverse primer binds the sense strand
+backwards, so its 3′-terminal base is the **leftmost** base of its footprint on the
+cDNA.
+ 
+### 5. Four specificity checks
+ 
+Each catches what the others cannot.
+ 
+| Check | Scope |
+|---|---|
+| Sibling in-silico PCR | other isoforms of this gene |
+| Repeat filter | 3′ k-mer frequency across the transcriptome — catches Alu |
+| BLAST forward × reverse | any other human transcript |
+| BLAST forward × forward, reverse × reverse | one primer amplifying alone |
+ 
+The last one matters: EMBOSS PrimerSearch, which BLAST replaced here, only ever pairs
+primer A with primer B — a primer binding one template twice in opposite orientations
+is structurally invisible to it. That is how an Alu primer passed every within-gene
+check on a first TFRC design.
+ 
+### 6. Rank
+ 
+Repeats last, then off-gene hits, then sibling hits, then 3′ margin, then anchor class,
+then junction-spanning, then thermodynamics. Specificity dominates chemistry.
+ 
+---
+ 
+## Parameters
+ 
+All at the top of `isosolo.py`.
+ 
+| Setting | Default | Source |
+|---|---|---|
+| `TERM_WINDOW` | 5 | Stadhouders 2010; same window Primer-BLAST uses |
+| `TERM_MM_TO_BLOCK` | 2 | Kwok 1990 — one terminal mismatch is often tolerated, two block |
+| `PB_MAX_TOTAL_MM` | 5 | Primer-BLAST ignores a site at 6+; Christopherson 1997 |
+| `PRIMER_BLAST_COMPATIBLE` | True | use the two rules above, so surviving pairs also pass Primer-BLAST |
+| `REQUIRE_DISCRIMINATING_ANCHOR` | True | the fix for window smearing (step 3) |
+| `CHIMERIC_WINDOW` | 41 bp | inherited |
+| `ALIGN_WINDOW` / `ALIGN_IDENTITY` | 15 bp / 0.90 | inherited; tolerates exactly one mismatch |
+| `MIN` / `MAX_AMPLICON` | 70 / 150 bp | Bio-Rad ddPCR guidance is 75–200 |
+| `PRIMER_TM_MIN` / `MAX` | 56 / 63 °C | Primer-BLAST defaults |
+| GC range | 35–65% | looser than Bio-Rad's 40–60%, because the anchor position is fixed |
+| `REPEAT_MAX_TRANSCRIPTS` | 50 | ours — Alu scores in the hundreds, a real primer 1–20 |
+| `MAX_OFFTARGET_PRODUCT` | 1200 bp | ours |
+| `GC_CLAMP_PARTNER` | True | G or C at the 3′ end of the **partner** primer only |
+| `GC_CLAMP_BOTH` | False | tested and rejected — dropped the margin from 3/5 to 0/5 |
+| `MAX_SELF_3P` | None | report Primer3 `SELF_END` without filtering, as Primer-BLAST does |
+| `TOP_N` | 10 | raise to 50 to surface genuinely different anchors |
+| `RUN_PRIMERSEARCH` | False | redundant once `BLAST_DB` is set |
+ 
+The GC clamp can only apply to the partner primer. The anchored primer's 3′ base is
+whichever base discriminates from the siblings — not ours to choose.
+ 
+---
+ 
+## Before ordering
+ 
+1. Open `*_assay.html` and confirm the anchored primer sits **on** the highlighted
+   unique region, not next to it. Five seconds, and it catches the worst failure mode.
+2. Check the four columns above are zero.
+3. Run `check_primers.py` on the chosen pair.
+4. Run NCBI [Primer-BLAST](https://www.ncbi.nlm.nih.gov/tools/primer-blast) —
+   *Homo sapiens*, `refseq_rna`. It queries live NCBI rather than your local GENCODE
+   snapshot.
+5. At the bench: temperature gradient 58–66 °C, then a gel. No-template control for
+   primer-dimer. DNase and no-RT if the amplicon doesn't span a junction.
+### Reading a Primer-BLAST hit
+ 
+Three questions settle most of them: are **both** primers present, is the product
+short enough to amplify, and is the 3′ end clean? Three noes and it isn't a real
+off-target — a 2 kb reverse-with-reverse product with a mismatched terminal base is
+noise.
+ 
+Note also that isosolo screens against **GENCODE** and Primer-BLAST against
+**RefSeq**. They won't always agree even with identical thresholds. TFRC-214 has no
+RefSeq equivalent at all, so Primer-BLAST reports "no target templates found" for a
+perfectly good pair.
+ 
+---
+ 
+## Limitations
+ 
+- **Annotation-bound.** An isoform absent from Ensembl is invisible to the screen.
+- **Two databases.** GENCODE here, RefSeq at Primer-BLAST. See above.
+- **Dense annotation blocks designs.** HNRNPC has 140 annotated isoforms, TFRC 61.
+  Designing against all of them is conservative and means many targets return
+  `no_unique_region`.
+- **The top-10 collapses.** Several reported pairs are often the same assay with one
+  or two bases added at the 5′ end. Raising `TOP_N` helps; dedup by anchor position
+  would be better.
+- **The margin number is pessimistic.** It reports 0 for pairs that brute force shows
+  have no binding site at all.
+- **These are predictions.** In-silico PCR models sequence, not polymerase, cycling
+  conditions or template structure. Wet-lab validation is still required.
+---
+ 
+## References
+ 
+- Kwok S et al. (1990) *Nucleic Acids Res* 18:999–1005 — effects of primer-template
+  mismatches; one 3′-terminal mismatch is often tolerated, two block.
+- Christopherson C et al. (1997) *Nucleic Acids Res* 25:654–658 — 2–4 mismatches
+  barely affect yield, 5 reduces it ~22-fold.
+- Stadhouders R et al. (2010) *J Mol Diagn* 12:109–117 — the 5 nt 3′ window.
+- Ye J et al. (2012) *BMC Bioinformatics* 13:134 — Primer-BLAST; the off-target rule
+  isosolo matches.
+- Britten RJ et al. (1988) *PNAS* 85:4770–4774 — Alu is over 10% of the human genome.
+- Song Y-C et al. (2023) *New Phytologist* 240:928–939 — QuantAS; independently
+  arrives at junction anchoring, and the source of the combination-assay idea.
+- McPherson MJ & Møller SG (2000) *PCR*, BIOS Scientific — the 5′ end does not
+  initiate extension.
+Built on primer3-py (SantaLucia 1998 thermodynamics), NCBI BLAST+, the Ensembl REST
+API and GENCODE v50.
+ 
+## License
+ 
+MIT
